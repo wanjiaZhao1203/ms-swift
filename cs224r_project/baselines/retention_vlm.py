@@ -73,7 +73,10 @@ class RetentionVLM(nn.Module):
             self.trunk.disable_talker()
         thinker = getattr(self.trunk, "thinker", self.trunk)
         d = thinker.config.hidden_size
-        self.hazard_head = nn.Linear(d, T_MAX, dtype=torch.bfloat16)
+        # Keep the hazard head in fp32: it's tiny (d*60 params) and the
+        # downstream cumsum/exp for R_hat needs the precision to avoid bf16
+        # rounding error accumulating over T_i seconds.
+        self.hazard_head = nn.Linear(d, T_MAX, dtype=torch.float32)
 
         if tokenizer is None:
             tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -90,7 +93,7 @@ class RetentionVLM(nn.Module):
         input_ids = mm_inputs["input_ids"]
         eoc_idx = locate_close_cot_positions(input_ids, self._close_cot_ids)
         h_eoc = h[torch.arange(h.size(0), device=h.device), eoc_idx]   # (B, d)
-        lam_hat = F.softplus(self.hazard_head(h_eoc))               # (B, T_max), >= 0
+        lam_hat = F.softplus(self.hazard_head(h_eoc.float()))       # (B, T_max), fp32, >= 0
         return out.logits, lam_hat
 
 

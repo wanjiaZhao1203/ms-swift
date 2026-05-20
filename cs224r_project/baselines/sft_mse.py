@@ -56,7 +56,8 @@ class RetentionHeadModel(nn.Module):
             self.trunk.disable_talker()
         thinker = getattr(self.trunk, "thinker", self.trunk)
         d = thinker.config.hidden_size
-        self.head = nn.Linear(d, T_MAX, dtype=torch.bfloat16)
+        # fp32 head for numerical stability of the sigmoid output.
+        self.head = nn.Linear(d, T_MAX, dtype=torch.float32)
 
     def forward(self, mm_inputs: dict, attention_mask: torch.Tensor):
         out = self.trunk(**mm_inputs, output_hidden_states=True, return_dict=True)
@@ -65,7 +66,7 @@ class RetentionHeadModel(nn.Module):
         lengths = attention_mask.sum(dim=1) - 1              # (B,)
         idx = lengths.clamp(min=0).long()
         h_last = h[torch.arange(h.size(0), device=h.device), idx]   # (B, d)
-        r_hat = torch.sigmoid(self.head(h_last))             # (B, 60)
+        r_hat = torch.sigmoid(self.head(h_last.float()))     # (B, 60), fp32
         return r_hat
 
 
