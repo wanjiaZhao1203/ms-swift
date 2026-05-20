@@ -281,7 +281,8 @@ def main():
         save_total_limit=2,
         dataloader_num_workers=2,
         remove_unused_columns=False,
-        report_to=["none"],
+        report_to=(["wandb"] if os.environ.get("WANDB_API_KEY") else ["none"]),
+        run_name=f"sft_hazard_cot_a{args.alpha}_seed{args.seed}",
         warmup_ratio=0.05,
     )
 

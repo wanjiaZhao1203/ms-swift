@@ -18,8 +18,16 @@ cs224r_project/
 ├── eval/
 │   └── make_test_preds.py       # §9 test_preds.parquet (SFT-MSE for now)
 ├── scripts/
-│   ├── run_sft_mse_seed.sh           # Stage 1 wrapper
-│   └── run_sft_hazard_cot_seed.sh    # Stage 2 wrapper
+│   ├── run_sft_mse_seed.sh           # Stage 1 wrapper (single seed)
+│   ├── run_sft_mse_all_seeds.sh      # Stage 1 wrapper (3 seeds)
+│   ├── run_sft_hazard_cot_seed.sh    # Stage 2 wrapper
+│   └── run_sft_hazard_cot_all_seeds.sh
+└── modal/
+    ├── _common.py                    # shared Image + Volume + Mount
+    ├── modal_prep.py                 # CPU container: data prep
+    ├── modal_train_sft_mse.py        # H100 container: Stage 1
+    ├── modal_train_sft_hazard_cot.py # H100 container: Stage 2
+    └── modal_eval.py                 # H100 container: test_preds.parquet
 └── runs/                        # checkpoints + test_preds.parquet per (method, seed)
 ```
 
@@ -67,13 +75,87 @@ sweep `{0.05, 0.1, 0.2}` if CoT under-trains on val.
 
 Output: LoRA adapter + `hazard_head.pt` per seed, ready for the GRPO stage.
 
+## Running on Modal (H100)
+
+All experiments target Modal per CS224R's compute guide. Setup once:
+
+```bash
+pip install modal
+modal setup                  # browser auth with Stanford email
+modal secret create wandb WANDB_API_KEY=<your_token>
+# optional, only needed for gated HF models:
+# modal secret create huggingface HF_TOKEN=<your_token>
+```
+
+Volume `cs224r-ttcc-retention` is auto-created on first use and persists:
+- `/vol/hf_cache/`   — HuggingFace dataset + model cache
+- `/vol/data/`       — extracted audio, mp4 symlinks, JSONL splits
+- `/vol/runs/{method}/seed{N}/` — checkpoints and test_preds.parquet
+
+### Stage 0: data prep (CPU container)
+
+```bash
+modal run cs224r_project/modal/modal_prep.py                          # T_i <= 30 default
+modal run cs224r_project/modal/modal_prep.py --max-duration 60        # if you want longer ads
+```
+
+### Stage 1: SFT-MSE training (H100)
+
+Smoke test first — loads one batch on the real model and exits:
+```bash
+modal run cs224r_project/modal/modal_train_sft_mse.py --seed 42 --smoke-only
+```
+
+Real run (use `--detach` so your terminal can close):
+```bash
+modal run --detach cs224r_project/modal/modal_train_sft_mse.py --seed 42
+# or all 3 seeds:
+modal run --detach cs224r_project/modal/modal_train_sft_mse.py --all-seeds
+```
+
+### Stage 1 inference: test_preds.parquet
+
+```bash
+# Single checkpoint:
+modal run cs224r_project/modal/modal_eval.py \
+    --checkpoint /vol/runs/sft_mse/seed42 \
+    --out /vol/runs/sft_mse/seed42/test_preds.parquet
+
+# Or all three seeds in parallel:
+modal run cs224r_project/modal/modal_eval.py --all-seeds-sft-mse
+```
+
+### Stage 2: SFT-Hazard+CoT (after CoT distillation lands)
+
+```bash
+# After merge_cot.py has populated splits/train_with_cot.jsonl on the volume:
+modal run --detach cs224r_project/modal/modal_train_sft_hazard_cot.py \
+    --seed 42 --alpha 0.1
+```
+
+### Debugging on Modal
+
+```bash
+# Open a shell in the same image as the training function:
+modal shell cs224r_project/modal/modal_train_sft_mse.py::train
+
+# Watch a detached run:
+modal app logs cs224r-sft-mse
+
+# Live profile a stuck container: visit modal.com dashboard → Containers tab.
+```
+
+To run *locally* (no Modal) the scripts under `scripts/` still work — the
+Modal wrappers just shell out to the same `python ...` commands.
+
 ## Status
 - [x] Data prep script
 - [x] SFT-MSE trainer + LoRA wrapper
 - [x] Test inference → parquet
-- [ ] Smoke run on 100 ads (next: actually execute)
+- [ ] Smoke run on 100 ads via `modal run … --smoke-only` (next: actually execute)
 - [x] RetentionVLM wrapper (§2)
 - [x] SFT-Hazard+CoT trainer (Stage 2; **waits on CoT distillation** to actually run)
+- [x] Modal entrypoints for prep / train / eval with WANDB hook
 - [ ] make_test_preds for SFT-Hazard+CoT (Stage 2 inference)
 - [ ] Cross-seed BCa bootstrap (Stage 3; final aggregation)
 
