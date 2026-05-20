@@ -71,8 +71,13 @@ class RetentionVLM(nn.Module):
         )
         if hasattr(self.trunk, "disable_talker"):
             self.trunk.disable_talker()
+        # In Qwen2.5-Omni the LM hidden size is at thinker.text_config.hidden_size.
         thinker = getattr(self.trunk, "thinker", self.trunk)
-        d = thinker.config.hidden_size
+        thinker_cfg = thinker.config
+        d = getattr(getattr(thinker_cfg, "text_config", thinker_cfg), "hidden_size",
+                    getattr(thinker_cfg, "hidden_size", None))
+        if d is None:
+            raise RuntimeError(f"could not locate hidden_size on {type(thinker_cfg).__name__}")
         # Keep the hazard head in fp32: it's tiny (d*60 params) and the
         # downstream cumsum/exp for R_hat needs the precision to avoid bf16
         # rounding error accumulating over T_i seconds.
@@ -88,7 +93,9 @@ class RetentionVLM(nn.Module):
           logits:     (B, L, V) for CoT cross-entropy.
           lam_hat:    (B, T_max) >= 0, hazard at </cot> position.
         """
-        out = self.trunk(**mm_inputs, output_hidden_states=True, return_dict=True)
+        # The outer Omni wrapper has no implemented forward; route directly
+        # into the thinker (the LM-with-MM-encoders submodule).
+        out = self.trunk.thinker(**mm_inputs, output_hidden_states=True, return_dict=True)
         h = out.hidden_states[-1]                                   # (B, L, d)
         input_ids = mm_inputs["input_ids"]
         eoc_idx = locate_close_cot_positions(input_ids, self._close_cot_ids)

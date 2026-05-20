@@ -34,10 +34,17 @@ VOLUME_PATH = "/vol"
 
 
 def make_cpu_image() -> modal.Image:
-    """Image for data prep: needs ffmpeg + datasets + decord."""
+    """Image for data prep: needs ffmpeg + datasets + decord + ttcc-eval.
+
+    ttcc-eval is a private repo. Rather than thread GITHUB_TOKEN through
+    Modal (which silently fails to expand in pip_install URLs), we bundle a
+    snapshot of the repo under ``cs224r_project/third_party/ttcc-eval`` and
+    pip-install it from the attached local directory. To bump the version,
+    re-clone the upstream and replace that directory.
+    """
     return (
         modal.Image.debian_slim(python_version="3.10")
-        .apt_install("ffmpeg")
+        .apt_install("ffmpeg", "git")
         .pip_install(
             "datasets>=2.18",
             "decord",
@@ -46,6 +53,8 @@ def make_cpu_image() -> modal.Image:
             "pandas",
             "pyarrow",
             "soundfile",
+            "scipy",
+            "numpy",
         )
     )
 
@@ -56,8 +65,10 @@ def make_gpu_image() -> modal.Image:
         modal.Image.debian_slim(python_version="3.10")
         .apt_install("ffmpeg", "git")
         .pip_install(
-            # Pin torch to a CUDA build compatible with H100.
-            "torch==2.4.0",
+            # Pin torch to a CUDA build compatible with H100. modern
+            # transformers refuses torch < 2.6 due to torch.load CVE.
+            "torch==2.6.0",
+            "torchvision==0.21.0",
             "transformers>=4.52,<4.58",
             "accelerate>=0.33",
             "peft>=0.11",
@@ -81,28 +92,46 @@ def make_gpu_image() -> modal.Image:
     )
 
 
-# Code mount: ships cs224r_project/ into /root/cs224r_project.
-code_mount = modal.Mount.from_local_dir(
-    str(LOCAL_PROJECT_DIR),
-    remote_path="/root/cs224r_project",
-)
+# Code mount: ships cs224r_project/ into /root/cs224r_project. The image
+# also has ttcc-eval installed in editable mode from
+# /root/cs224r_project/third_party/ttcc-eval, which is the source of truth
+# for ground-truth preprocessing. We additionally use
+# `add_local_python_source('_common')` so the entrypoint scripts'
+# `from _common import ...` works on the remote side without any sys.path
+# munging — Modal places _common.py at /root on PYTHONPATH.
+def attach_code(image: modal.Image) -> modal.Image:
+    """Layer the local cs224r_project/ directory + ttcc-eval install."""
+    return (
+        image
+        .add_local_dir(
+            str(LOCAL_PROJECT_DIR),
+            remote_path="/root/cs224r_project",
+            copy=True,
+        )
+        .run_commands(
+            "pip install /root/cs224r_project/third_party/ttcc-eval"
+        )
+        .add_local_python_source("_common", copy=True)
+    )
 
 
 # Optional WANDB secret. Create with:
 #   modal secret create wandb WANDB_API_KEY=<your_token>
 wandb_secret = modal.Secret.from_name("wandb", required_keys=["WANDB_API_KEY"])
 
+# GitHub PAT for installing the private ttcc-eval repo. Create with:
+#   modal secret create github GITHUB_TOKEN=<your_pat>
+# Token needs "Contents: read" on cliangyu/ttcc-eval (+ ttcc-inference if used).
+github_secret = modal.Secret.from_name("github", required_keys=["GITHUB_TOKEN"])
 
-# HuggingFace secret for any gated models (Qwen-Omni is public, but keep the
-# hook in place for later). Create with:
+
+# HuggingFace secret is intentionally not exported. Qwen2.5-Omni-3B is
+# public, so no HF auth is needed. If you later need to pull a gated model:
 #   modal secret create huggingface HF_TOKEN=<your_token>
-# If you don't need it, comment out the `secrets=` line in the GPU functions.
-try:
-    hf_secret = modal.Secret.from_name("huggingface", required_keys=["HF_TOKEN"])
-    HAS_HF_SECRET = True
-except Exception:
-    hf_secret = None
-    HAS_HF_SECRET = False
+# then add it as a secret only on the specific entrypoint that needs it
+# (don't make it a global import — Modal raises at any reference site if
+# the secret doesn't exist).
+hf_secret = None
 
 
 def common_env() -> dict[str, str]:
@@ -112,4 +141,14 @@ def common_env() -> dict[str, str]:
         "TOKENIZERS_PARALLELISM": "false",
         # WANDB project + run-grouping is set inside each script.
         "WANDB_PROJECT": "cs224r-ttcc-retention",
+        # Cap video sampling to fit 30-second ads on one H100. Without these
+        # qwen_omni_utils emits 150k+ video patches per ad (≈30k LM tokens),
+        # which blows out activations even at batch 1 with grad checkpointing.
+        # 50176 px ≈ 224x224 per patch; 12 frames keeps the temporal cue.
+        "VIDEO_MAX_PIXELS": "50176",
+        "FPS_MAX_FRAMES": "12",
+        "MAX_PIXELS": "1003520",
+        # Reduce CUDA fragmentation: the OOM trace was sitting on ~13GB
+        # reserved-but-unallocated.
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
     }

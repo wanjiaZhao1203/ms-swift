@@ -83,9 +83,23 @@ All experiments target Modal per CS224R's compute guide. Setup once:
 pip install modal
 modal setup                  # browser auth with Stanford email
 modal secret create wandb WANDB_API_KEY=<your_token>
-# optional, only needed for gated HF models:
+# Optional — only needed for gated HF models:
 # modal secret create huggingface HF_TOKEN=<your_token>
 ```
+
+### ttcc-eval bundling
+
+The private ttcc-eval repo is **bundled** into `third_party/ttcc-eval/`
+(no Modal secret needed; we copied the source in directly). To bump:
+
+```bash
+cd /tmp && git clone https://github.com/cliangyu/ttcc-eval.git
+rm -rf /Users/zwj/ms-swift/cs224r_project/third_party/ttcc-eval
+cp -r /tmp/ttcc-eval /Users/zwj/ms-swift/cs224r_project/third_party/ttcc-eval
+rm -rf /Users/zwj/ms-swift/cs224r_project/third_party/ttcc-eval/.git
+```
+
+The Modal image build does `pip install /root/cs224r_project/third_party/ttcc-eval`.
 
 Volume `cs224r-ttcc-retention` is auto-created on first use and persists:
 - `/vol/hf_cache/`   — HuggingFace dataset + model cache
@@ -94,9 +108,16 @@ Volume `cs224r-ttcc-retention` is auto-created on first use and persists:
 
 ### Stage 0: data prep (CPU container)
 
+`prep_ttcc.py` delegates ground-truth preprocessing to ttcc-eval (peak-normalize
+0–100 → 0–1, monotone smoothing, T_i computation, drop rules). Splits come from
+the dataset's `split` column (train/val/test), **not** a custom shuffle. The
+training-set filter `--train-max-duration` controls only which long ads are
+dropped from training; val/test keep full clean T_i ∈ [5, 60] so our submissions
+align with eval ground truth row-for-row.
+
 ```bash
-modal run cs224r_project/modal/modal_prep.py                          # T_i <= 30 default
-modal run cs224r_project/modal/modal_prep.py --max-duration 60        # if you want longer ads
+modal run cs224r_project/modal/modal_prep.py                          # train T_i <= 60
+modal run cs224r_project/modal/modal_prep.py --train-max-duration 30  # strict audio cap
 ```
 
 ### Stage 1: SFT-MSE training (H100)
@@ -113,16 +134,28 @@ modal run --detach cs224r_project/modal/modal_train_sft_mse.py --seed 42
 modal run --detach cs224r_project/modal/modal_train_sft_mse.py --all-seeds
 ```
 
-### Stage 1 inference: test_preds.parquet
+### Stage 1 inference + ttcc-eval evaluation
+
+`modal_eval.py` runs three steps per checkpoint:
+1. `make_test_preds.py` writes diagnostic parquet (includes R_true).
+2. `write_submission.py` writes a contract-compliant parquet (ad_id, R_hat, method, seed).
+3. `ttcc-eval evaluate` writes `/vol/reports/{method}_seed{N}.json` with
+   ρ_hook / ρ_comp / ρ̄_shape and 95% BCa bootstrap CIs.
 
 ```bash
 # Single checkpoint:
 modal run cs224r_project/modal/modal_eval.py \
     --checkpoint /vol/runs/sft_mse/seed42 \
-    --out /vol/runs/sft_mse/seed42/test_preds.parquet
+    --method sft_mse --seed 42
 
-# Or all three seeds in parallel:
+# Sweep all three SFT-MSE seeds in parallel:
 modal run cs224r_project/modal/modal_eval.py --all-seeds-sft-mse
+```
+
+Reports land on the volume at `/vol/reports/`. Pull them locally with:
+
+```bash
+modal volume get cs224r-ttcc-retention /reports/ ./reports/
 ```
 
 ### Stage 2: SFT-Hazard+CoT (after CoT distillation lands)
@@ -156,8 +189,10 @@ Modal wrappers just shell out to the same `python ...` commands.
 - [x] RetentionVLM wrapper (§2)
 - [x] SFT-Hazard+CoT trainer (Stage 2; **waits on CoT distillation** to actually run)
 - [x] Modal entrypoints for prep / train / eval with WANDB hook
+- [x] ttcc-eval integration: dataset split column, peak-norm via preprocess, submission contract, automatic evaluate call
 - [ ] make_test_preds for SFT-Hazard+CoT (Stage 2 inference)
-- [ ] Cross-seed BCa bootstrap (Stage 3; final aggregation)
+- [ ] Multi-seed R_hat averaging in write_submission (§9 — 3 rollouts per ad for CoT methods)
+- [ ] Paired BCa via `ttcc-eval compare` (SFT-MSE vs SFT-Hazard+CoT vs GRPO)
 
 ## Open issues / known caveats
 - **100-ad smoke set only**: numbers will not be meaningful; this stage validates the
@@ -174,4 +209,6 @@ Modal wrappers just shell out to the same `python ...` commands.
 ## Tested on
 - Single A100 / H100 80 GB, bf16, LoRA rank 8.
 - `ffmpeg` available on PATH for `prep_ttcc.py`.
-- `pip install datasets transformers peft scipy pandas pyarrow tqdm`.
+- `pip install datasets transformers peft scipy pandas pyarrow tqdm`
+- `pip install 'ttcc-eval @ git+https://github.com/cliangyu/ttcc-eval.git@main'`
+  (private repo — needs git+SSH or a PAT in the URL).

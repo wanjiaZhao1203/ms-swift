@@ -54,13 +54,22 @@ class RetentionHeadModel(nn.Module):
         )
         if hasattr(self.trunk, "disable_talker"):
             self.trunk.disable_talker()
+        # In Qwen2.5-Omni the LM hidden size lives at thinker.text_config.hidden_size
+        # (the thinker_config itself doesn't carry it directly).
         thinker = getattr(self.trunk, "thinker", self.trunk)
-        d = thinker.config.hidden_size
+        thinker_cfg = thinker.config
+        d = getattr(getattr(thinker_cfg, "text_config", thinker_cfg), "hidden_size",
+                    getattr(thinker_cfg, "hidden_size", None))
+        if d is None:
+            raise RuntimeError(f"could not locate hidden_size on {type(thinker_cfg).__name__}")
         # fp32 head for numerical stability of the sigmoid output.
         self.head = nn.Linear(d, T_MAX, dtype=torch.float32)
 
     def forward(self, mm_inputs: dict, attention_mask: torch.Tensor):
-        out = self.trunk(**mm_inputs, output_hidden_states=True, return_dict=True)
+        # The outer Qwen2_5OmniForConditionalGeneration has no implemented
+        # forward; it only routes generation through thinker/talker. We hit
+        # the thinker (which is the LM-with-MM-encoders) directly.
+        out = self.trunk.thinker(**mm_inputs, output_hidden_states=True, return_dict=True)
         h = out.hidden_states[-1]                            # (B, L, d)
         # Pool over the last non-pad token of each sequence.
         lengths = attention_mask.sum(dim=1) - 1              # (B,)
@@ -101,7 +110,13 @@ class TTCCCollator:
             conv = [{
                 "role": "user",
                 "content": [
-                    {"type": "video", "video": video_path},
+                    # Cap to nframes=8 (FRAME_FACTOR=2 enforced) and the
+                    # minimum legal frame pixels (~100k = 28*28*128). With 8
+                    # frames @ 100k px each we get ~800k vision tokens, well
+                    # within H100 budget after grad checkpointing.
+                    # qwen_omni_utils reads these per-element rather than env.
+                    {"type": "video", "video": video_path,
+                     "max_pixels": 100352, "nframes": 8},
                     {"type": "audio", "audio": audio_path},
                     {"type": "text",  "text":  USER_PROMPT},
                 ],
@@ -185,6 +200,13 @@ def main():
 
     processor = AutoProcessor.from_pretrained(args.model_id)
     model = RetentionHeadModel(args.model_id)
+    # Gradient checkpointing on the thinker (the LM-with-encoders) saves
+    # ~30-50% activation memory at ~20% throughput cost. Necessary for the
+    # 30k-token MM sequences we see at batch_size > 1 on a 80GB H100.
+    if hasattr(model.trunk.thinker, "gradient_checkpointing_enable"):
+        model.trunk.thinker.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
 
     # Freeze vision + audio encoders; LoRA-tune the LLM decoder; head is full-rank.
     for n, p in model.trunk.named_parameters():
@@ -199,8 +221,11 @@ def main():
         bias="none",
         task_type="CAUSAL_LM",
     )
-    # Wrap the trunk only; the head stays full-rank.
-    model.trunk = get_peft_model(model.trunk, lora_cfg)
+    # IMPORTANT: wrap the *thinker*, not the outer Omni wrapper. The outer
+    # Qwen2_5OmniForConditionalGeneration has no implemented .forward()
+    # (it delegates to thinker/talker via its own dispatch), so PEFT's
+    # base_model.forward(input_ids=...) call would hit _forward_unimplemented.
+    model.trunk.thinker = get_peft_model(model.trunk.thinker, lora_cfg)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     print(f"trainable params: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
@@ -256,14 +281,14 @@ def main():
         return
 
     trainer.train()
-    trainer.save_model(args.output_dir)
 
-    # Save the head weights separately for clean reload.
+    # Save the LoRA adapter (on the thinker) and the sigmoid head separately.
+    model.trunk.thinker.save_pretrained(args.output_dir)
     torch.save(
         {"head": model.head.state_dict()},
         os.path.join(args.output_dir, "retention_head.pt"),
     )
-    print(f"saved to {args.output_dir}")
+    print(f"saved LoRA adapter + retention head to {args.output_dir}")
 
 
 if __name__ == "__main__":

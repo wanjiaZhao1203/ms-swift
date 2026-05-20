@@ -93,7 +93,11 @@ class TTCCCollatorCoT:
         user = {
             "role": "user",
             "content": [
-                {"type": "video", "video": video_path},
+                # Cap per-element so MM expansion stays small on a 80GB H100.
+                # max_pixels must be >= VIDEO_FRAME_MIN_PIXELS=100352 in
+                # qwen_omni_utils 0.0.9; nframes does the rest.
+                {"type": "video", "video": video_path,
+                 "max_pixels": 100352, "nframes": 8},
                 {"type": "audio", "audio": audio_path},
                 {"type": "text",  "text":  USER_PROMPT},
             ],
@@ -255,7 +259,8 @@ def main():
         bias="none",
         task_type="CAUSAL_LM",
     )
-    model.trunk = get_peft_model(model.trunk, lora_cfg)
+    # Wrap the thinker, not the outer wrapper (see sft_mse.py comment).
+    model.trunk.thinker = get_peft_model(model.trunk.thinker, lora_cfg)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     print(f"trainable params: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
@@ -315,20 +320,23 @@ def main():
     trainer.train()
 
     # §6 requires saving the LoRA-merged trunk plus the hazard head separately,
-    # so the GRPO stage can load a clean HF-format model.
+    # so the GRPO stage can load a clean HF-format model. Since LoRA wraps
+    # the thinker, merge happens at that level; the outer Omni wrapper is
+    # then saved normally.
     merged_dir = os.path.join(args.output_dir, "merged_trunk")
-    print(f"merging LoRA into trunk and saving to {merged_dir}")
-    merged_trunk = model.trunk.merge_and_unload()
-    merged_trunk.save_pretrained(merged_dir)
+    print(f"merging LoRA into thinker and saving full model to {merged_dir}")
+    model.trunk.thinker = model.trunk.thinker.merge_and_unload()
+    model.trunk.save_pretrained(merged_dir)
     processor.save_pretrained(merged_dir)
 
     torch.save(
         {"hazard_head": model.hazard_head.state_dict()},
         os.path.join(args.output_dir, "hazard_head.pt"),
     )
-    # Also keep the unmerged adapter for resume-from-checkpoint.
-    trainer.save_model(args.output_dir)
-    print(f"saved adapter + merged trunk + hazard head to {args.output_dir}")
+    # The thinker is now merged in-place; the merged_trunk dir already has
+    # the full HF-format model. No separate adapter-only save needed since
+    # we merged before reaching this point.
+    print(f"saved merged trunk + hazard head to {args.output_dir}")
 
 
 if __name__ == "__main__":

@@ -10,17 +10,21 @@ Run:
 """
 
 import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import modal
 
 from _common import (
-    VOLUME_PATH, code_mount, common_env, hf_secret, make_gpu_image, volume,
-    wandb_secret,
+    VOLUME_PATH, attach_code, common_env, hf_secret,
+    make_gpu_image, volume, wandb_secret,
 )
 
 
 app = modal.App("cs224r-sft-hazard-cot")
-image = make_gpu_image()
+image = attach_code(make_gpu_image())
 
 _secrets = [wandb_secret]
 if hf_secret is not None:
@@ -29,7 +33,6 @@ if hf_secret is not None:
 
 @app.function(
     image=image,
-    mounts=[code_mount],
     volumes={VOLUME_PATH: volume},
     secrets=_secrets,
     gpu="H100",

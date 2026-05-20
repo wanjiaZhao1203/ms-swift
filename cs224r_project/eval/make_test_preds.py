@@ -34,8 +34,8 @@ from baselines.sft_mse import (  # noqa: E402
 
 def load_checkpoint(model_id: str, ckpt_dir: str) -> RetentionHeadModel:
     model = RetentionHeadModel(model_id)
-    # Reload LoRA adapter
-    model.trunk = PeftModel.from_pretrained(model.trunk, ckpt_dir)
+    # LoRA adapter is on the thinker (see sft_mse.py).
+    model.trunk.thinker = PeftModel.from_pretrained(model.trunk.thinker, ckpt_dir)
     head_state = torch.load(os.path.join(ckpt_dir, "retention_head.pt"), map_location="cpu")
     model.head.load_state_dict(head_state["head"])
     model.eval()

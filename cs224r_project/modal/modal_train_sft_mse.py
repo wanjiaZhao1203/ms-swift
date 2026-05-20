@@ -16,17 +16,21 @@ Smoke verification only (loads first batch, prints shapes, exits):
 """
 
 import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import modal
 
 from _common import (
-    VOLUME_PATH, code_mount, common_env, hf_secret, make_gpu_image, volume,
-    wandb_secret,
+    VOLUME_PATH, attach_code, common_env, hf_secret,
+    make_gpu_image, volume, wandb_secret,
 )
 
 
 app = modal.App("cs224r-sft-mse")
-image = make_gpu_image()
+image = attach_code(make_gpu_image())
 
 
 _secrets = [wandb_secret]
@@ -36,7 +40,6 @@ if hf_secret is not None:
 
 @app.function(
     image=image,
-    mounts=[code_mount],
     volumes={VOLUME_PATH: volume},
     secrets=_secrets,
     gpu="H100",
@@ -47,8 +50,11 @@ if hf_secret is not None:
 def train(
     seed: int = 42,
     lr: float = 1e-5,
-    per_device_train_batch_size: int = 4,
-    gradient_accumulation_steps: int = 4,
+    # 30k-token MM sequences blow up activations; per-device 1 + grad-accum 16
+    # gives the §5 effective batch (16) and fits within 80GB after gradient
+    # checkpointing.
+    per_device_train_batch_size: int = 1,
+    gradient_accumulation_steps: int = 16,
     num_train_epochs: float = 1.0,
     lora_rank: int = 8,
     smoke_only: bool = False,
@@ -84,8 +90,8 @@ def train(
 def main(
     seed: int = 42,
     lr: float = 1e-5,
-    per_device_train_batch_size: int = 4,
-    gradient_accumulation_steps: int = 4,
+    per_device_train_batch_size: int = 1,
+    gradient_accumulation_steps: int = 16,
     num_train_epochs: float = 1.0,
     lora_rank: int = 8,
     smoke_only: bool = False,
