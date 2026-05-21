@@ -8,10 +8,10 @@ data/raw/
 data/audios/
 data/videos/
 data/splits/
-runs/
-
-# Keep reports/ tracked but ignore intermediate predictions.
+# Ignore inside runs/ except the small JSON reports we want tracked.
+runs/*
 !runs/reports/
+!runs/reports/**
 
 # Python build / cache.
 __pycache__/

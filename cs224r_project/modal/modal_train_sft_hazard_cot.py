@@ -44,8 +44,10 @@ def train(
     seed: int = 42,
     alpha: float = 0.1,
     lr: float = 1e-5,
-    per_device_train_batch_size: int = 2,
-    gradient_accumulation_steps: int = 8,
+    # CoT text + hazard activations push the per-sample memory; per-device 2
+    # OOMs at micro-batch 4. Drop to 1 (same as Stage 1) for safety.
+    per_device_train_batch_size: int = 1,
+    gradient_accumulation_steps: int = 16,
     num_train_epochs: float = 1.0,
     lora_rank: int = 8,
     smoke_only: bool = False,
@@ -83,8 +85,8 @@ def main(
     seed: int = 42,
     alpha: float = 0.1,
     lr: float = 1e-5,
-    per_device_train_batch_size: int = 2,
-    gradient_accumulation_steps: int = 8,
+    per_device_train_batch_size: int = 1,
+    gradient_accumulation_steps: int = 16,
     num_train_epochs: float = 1.0,
     lora_rank: int = 8,
     smoke_only: bool = False,

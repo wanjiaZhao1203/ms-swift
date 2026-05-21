@@ -24,12 +24,21 @@ import statistics
 from pathlib import Path
 
 METRICS = [
+    # Primary proper-scoring-rule + diagnostics (docs/07 revision).
+    ("ibs",                 "IBS↓"),
+    ("calibration_slope",   "calib_slope"),
+    ("auc_spearman",        "AUC_ρ"),
+    # Legacy milestone-§1 rank metrics (kept as diagnostics).
     ("hook_spearman",       "ρ_hook"),
     ("completion_spearman", "ρ_comp"),
     ("shape_spearman_mean", "ρ̄_shape"),
     ("hook_mae",            "MAE@3"),
     ("completion_mae",      "MAE@T"),
 ]
+
+# Metrics where lower is better — used for the "all CIs better than baseline"
+# annotation; for rank metrics we test against 0 (the random-chance threshold).
+LOWER_IS_BETTER = {"ibs", "hook_mae", "completion_mae"}
 
 
 def load_report(path: Path) -> dict:

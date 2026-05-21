@@ -53,6 +53,7 @@ def make_preds_and_eval(
     seed: int,
     test_jsonl: str = "/vol/data/splits/test.jsonl",
     batch_size: int = 2,
+    skip_inference_if_cached: bool = True,
 ) -> dict:
     import os
     os.environ.update(common_env())
@@ -69,16 +70,25 @@ def make_preds_and_eval(
     report_dir.mkdir(parents=True, exist_ok=True)
     report_json = report_dir / f"{method}_seed{seed}.json"
 
-    # 1) Predict.
-    cmd = [
-        "python", "/root/cs224r_project/eval/make_test_preds.py",
-        "--checkpoint", str(run_dir),
-        "--test_jsonl", test_jsonl,
-        "--out_parquet", str(diag_parquet),
-        "--batch_size", str(batch_size),
-    ]
-    print(f"$ {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    # 1) Predict. Route by method: hazard methods use hazard-head inference.
+    # Skip Qwen forward pass if cached predictions already exist (useful for
+    # re-eval after a ttcc-eval upgrade — no need to redo expensive inference).
+    if skip_inference_if_cached and diag_parquet.exists():
+        print(f"[skip] reusing cached predictions at {diag_parquet}")
+    else:
+        if "hazard" in method or "grpo" in method:
+            infer_script = "/root/cs224r_project/eval/make_test_preds_hazard.py"
+        else:
+            infer_script = "/root/cs224r_project/eval/make_test_preds.py"
+        cmd = [
+            "python", infer_script,
+            "--checkpoint", str(run_dir),
+            "--test_jsonl", test_jsonl,
+            "--out_parquet", str(diag_parquet),
+            "--batch_size", str(batch_size),
+        ]
+        print(f"$ {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
 
     # 2) Write eval-contract submission parquet.
     cmd = [
@@ -121,13 +131,27 @@ def main(
     checkpoint: str = "",
     method: str = "",
     seed: int = -1,
-    test_jsonl: str = "/vol/data/splits/test.jsonl",
+    test_jsonl: str = "",
     batch_size: int = 2,
     all_seeds_sft_mse: bool = False,
+    all_seeds_sft_hazard_cot: bool = False,
+    alpha: float = 0.1,
 ):
     if all_seeds_sft_mse:
+        tj = test_jsonl or "/vol/data/splits/test.jsonl"
         configs = [
-            (f"/vol/runs/sft_mse/seed{s}", "sft_mse", s, test_jsonl, batch_size)
+            (f"/vol/runs/sft_mse/seed{s}", "sft_mse", s, tj, batch_size)
+            for s in [42, 43, 44]
+        ]
+        for result in make_preds_and_eval.starmap(configs):
+            print(json.dumps(result, indent=2, default=str))
+        return
+
+    if all_seeds_sft_hazard_cot:
+        tj = test_jsonl or "/vol/data/splits/test_with_cot.jsonl"
+        configs = [
+            (f"/vol/runs/sft_hazard_cot/seed{s}_a{alpha}",
+             "sft_hazard_cot", s, tj, batch_size)
             for s in [42, 43, 44]
         ]
         for result in make_preds_and_eval.starmap(configs):
@@ -136,11 +160,17 @@ def main(
 
     if not (checkpoint and method and seed >= 0):
         raise SystemExit(
-            "either pass --all-seeds-sft-mse or all of "
-            "--checkpoint, --method, --seed"
+            "either pass --all-seeds-sft-mse / --all-seeds-sft-hazard-cot or "
+            "all of --checkpoint, --method, --seed"
         )
+    # Default test_jsonl: hazard methods need the CoT-tagged version.
+    tj = test_jsonl or (
+        "/vol/data/splits/test_with_cot.jsonl"
+        if "hazard" in method or "grpo" in method
+        else "/vol/data/splits/test.jsonl"
+    )
     result = make_preds_and_eval.remote(
         checkpoint=checkpoint, method=method, seed=seed,
-        test_jsonl=test_jsonl, batch_size=batch_size,
+        test_jsonl=tj, batch_size=batch_size,
     )
     print(json.dumps(result, indent=2, default=str))

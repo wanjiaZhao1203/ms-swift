@@ -20,7 +20,11 @@ from pathlib import Path
 
 
 def load_cot_manifest(path: str) -> dict[str, str]:
-    """Accepts either a JSONL with {ad_id, cot} per line or a JSON {ad_id: cot}."""
+    """Accepts:
+      - JSONL with `{ad_id, cot}` or `{ad_id, raw}` per line (Liangyu's
+        ttcc-cot dataset uses `raw`),
+      - JSON dict `{ad_id: <str or {cot|raw: str}>}`.
+    """
     p = Path(path)
     text = p.read_text()
     out: dict[str, str] = {}
@@ -30,11 +34,15 @@ def load_cot_manifest(path: str) -> dict[str, str]:
             if not line:
                 continue
             row = json.loads(line)
-            out[str(row["ad_id"])] = row.get("cot", "")
+            cot = row.get("cot") or row.get("raw") or ""
+            out[str(row["ad_id"])] = cot
     else:
         raw = json.loads(text)
         for k, v in raw.items():
-            out[str(k)] = v if isinstance(v, str) else v.get("cot", "")
+            if isinstance(v, str):
+                out[str(k)] = v
+            else:
+                out[str(k)] = v.get("cot") or v.get("raw") or ""
     return out
 
 

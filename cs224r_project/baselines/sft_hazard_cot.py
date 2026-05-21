@@ -246,6 +246,13 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
     model = RetentionVLM(args.model_id, tokenizer=tokenizer)
 
+    # Gradient checkpointing on the thinker. Without this the 30k-token MM
+    # sequence + CoT activations exceed 80GB even at batch_size 1.
+    if hasattr(model.trunk.thinker, "gradient_checkpointing_enable"):
+        model.trunk.thinker.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
+
     # Freeze vision + audio encoders.
     for n, p in model.trunk.named_parameters():
         if "visual" in n or "audio_tower" in n or "vision" in n:

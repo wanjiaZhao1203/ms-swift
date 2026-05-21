@@ -64,11 +64,19 @@ class RetentionVLM(nn.Module):
 
     T_max = T_MAX
 
-    def __init__(self, model_id: str, tokenizer=None):
+    def __init__(self, model_id_or_trunk, tokenizer=None):
+        """Accepts either a HF model id (str) or a pre-built trunk module.
+        Inference scripts pass a pre-built trunk to avoid re-downloading the
+        base weights every call."""
         super().__init__()
-        self.trunk = Qwen2_5OmniForConditionalGeneration.from_pretrained(
-            model_id, torch_dtype=torch.bfloat16,
-        )
+        if isinstance(model_id_or_trunk, str):
+            self.trunk = Qwen2_5OmniForConditionalGeneration.from_pretrained(
+                model_id_or_trunk, torch_dtype=torch.bfloat16,
+            )
+            model_id = model_id_or_trunk
+        else:
+            self.trunk = model_id_or_trunk
+            model_id = "Qwen/Qwen2.5-Omni-3B"  # for AutoTokenizer fallback
         if hasattr(self.trunk, "disable_talker"):
             self.trunk.disable_talker()
         # In Qwen2.5-Omni the LM hidden size is at thinker.text_config.hidden_size.
