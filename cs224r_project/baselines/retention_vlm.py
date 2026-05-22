@@ -128,14 +128,18 @@ def masked_hazard_log_mse(lam_hat: torch.Tensor,
                           lam_true: torch.Tensor,
                           T_i: torch.Tensor,
                           eps_hat: float = 1e-6,
-                          floor_true: float = 1e-3) -> torch.Tensor:
+                          floor_true: float = 1e-3,
+                          strict_spec: bool = False) -> torch.Tensor:
     """Per-batch masked log-hazard MSE (§3).
 
-    Mask = (t < T_i) AND (lam_true > floor_true). The second condition drops
-    seconds where the retention curve was flat (lam_true ~ 0); without it,
-    clamping lam_true to eps produces a strongly negative log target (~-13.8
-    at eps=1e-6) that biases the model toward unrealistically low hazards
-    on stable segments.
+    Two modes:
+      - strict_spec=False (default): mask = (t < T_i) AND (lam_true > floor_true).
+        The second condition drops seconds where retention is flat (lam_true ~ 0)
+        to avoid pushing the model toward log(eps) ~ -13.8 on stable segments.
+        Empirically helps training stability. NOT in the spec.
+      - strict_spec=True: mask = (t < T_i) only, as written in exp_plan §3.
+        L_hazard_i = sum((log lam_hat - log lam_true_safe)^2 * mask) / T_i.
+        lam_true is floor-clamped to eps_hat before log.
 
     lam_hat:  (B, 60)  softplus output, > 0.
     lam_true: (B, 60)  ground-truth hazards (only first T_i entries valid).
@@ -144,12 +148,16 @@ def masked_hazard_log_mse(lam_hat: torch.Tensor,
     B, T = lam_hat.shape
     arange = torch.arange(T, device=lam_hat.device).unsqueeze(0).expand(B, T)
     duration_mask = arange < T_i.unsqueeze(1)
-    informative = lam_true > floor_true
-    mask = (duration_mask & informative).to(lam_hat.dtype)          # (B, T)
+    if strict_spec:
+        mask = duration_mask.to(lam_hat.dtype)
+        denom = T_i.to(lam_hat.dtype).clamp(min=1.0)
+    else:
+        informative = lam_true > floor_true
+        mask = (duration_mask & informative).to(lam_hat.dtype)
+        denom = mask.sum(dim=1).clamp(min=1.0)
     lam_hat_safe = lam_hat.clamp(min=eps_hat)
     lam_true_safe = lam_true.clamp(min=eps_hat)
     sq = (torch.log(lam_hat_safe) - torch.log(lam_true_safe)) ** 2
-    denom = mask.sum(dim=1).clamp(min=1.0)
     per_ad = (sq * mask).sum(dim=1) / denom
     return per_ad.mean()
 

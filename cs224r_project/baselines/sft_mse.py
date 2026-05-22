@@ -110,13 +110,11 @@ class TTCCCollator:
             conv = [{
                 "role": "user",
                 "content": [
-                    # Cap to nframes=8 (FRAME_FACTOR=2 enforced) and the
-                    # minimum legal frame pixels (~100k = 28*28*128). With 8
-                    # frames @ 100k px each we get ~800k vision tokens, well
-                    # within H100 budget after grad checkpointing.
+                    # Hyperparams aligned to Liangyu's full-SFT config
+                    # (sft_v2cot_full.sh): MAX_PIXELS=200704, FPS_MAX_FRAMES=32.
                     # qwen_omni_utils reads these per-element rather than env.
                     {"type": "video", "video": video_path,
-                     "max_pixels": 100352, "nframes": 8},
+                     "max_pixels": 200704, "nframes": 32},
                     {"type": "audio", "audio": audio_path},
                     {"type": "text",  "text":  USER_PROMPT},
                 ],
@@ -208,11 +206,6 @@ def main():
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
 
-    # Freeze vision + audio encoders; LoRA-tune the LLM decoder; head is full-rank.
-    for n, p in model.trunk.named_parameters():
-        if "visual" in n or "audio_tower" in n or "vision" in n:
-            p.requires_grad_(False)
-
     lora_cfg = LoraConfig(
         r=args.lora_rank,
         lora_alpha=args.lora_rank * 4,
@@ -226,6 +219,20 @@ def main():
     # (it delegates to thinker/talker via its own dispatch), so PEFT's
     # base_model.forward(input_ids=...) call would hit _forward_unimplemented.
     model.trunk.thinker = get_peft_model(model.trunk.thinker, lora_cfg)
+
+    # Freeze vision + audio encoders AFTER LoRA wrap. PEFT injects adapters
+    # on all linears including audio_tower.* and visual.*; we explicitly
+    # zero their requires_grad to comply with §5's
+    # freeze_vision_encoder=True, freeze_audio_encoder=True.
+    n_frozen = 0
+    for n, p in model.named_parameters():
+        if p.requires_grad and (
+            "visual" in n or "audio_tower" in n or "vision" in n
+            or ".merger." in n
+        ):
+            p.requires_grad_(False)
+            n_frozen += p.numel()
+    print(f"post-LoRA freeze: zero'd {n_frozen:,} params in vision/audio")
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     print(f"trainable params: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")

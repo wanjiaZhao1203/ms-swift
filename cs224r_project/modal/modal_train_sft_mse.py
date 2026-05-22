@@ -55,14 +55,16 @@ def train(
     # checkpointing.
     per_device_train_batch_size: int = 1,
     gradient_accumulation_steps: int = 16,
-    num_train_epochs: float = 1.0,
+    num_train_epochs: float = 10.0,
     lora_rank: int = 8,
     smoke_only: bool = False,
+    out_subdir: str = "",
 ) -> str:
     import os
     os.environ.update(common_env())
 
-    out_dir = f"/vol/runs/sft_mse/seed{seed}"
+    sub = out_subdir or f"seed{seed}"
+    out_dir = f"/vol/runs/sft_mse/{sub}"
     os.makedirs(out_dir, exist_ok=True)
 
     cmd = [
@@ -92,15 +94,17 @@ def main(
     lr: float = 1e-5,
     per_device_train_batch_size: int = 1,
     gradient_accumulation_steps: int = 16,
-    num_train_epochs: float = 1.0,
+    num_train_epochs: float = 10.0,
     lora_rank: int = 8,
     smoke_only: bool = False,
+    out_subdir: str = "",
     all_seeds: bool = False,
 ):
     if all_seeds:
         seeds = [42, 43, 44]
         for s in seeds:
-            print(f"===== SFT-MSE seed={s} =====")
+            sub = out_subdir.replace("{seed}", str(s)) if "{seed}" in out_subdir else (out_subdir or f"seed{s}")
+            print(f"===== SFT-MSE seed={s} out_subdir={sub} =====")
             train.remote(
                 seed=s,
                 lr=lr,
@@ -109,6 +113,7 @@ def main(
                 num_train_epochs=num_train_epochs,
                 lora_rank=lora_rank,
                 smoke_only=smoke_only,
+                out_subdir=sub,
             )
     else:
         out = train.remote(
@@ -119,5 +124,6 @@ def main(
             num_train_epochs=num_train_epochs,
             lora_rank=lora_rank,
             smoke_only=smoke_only,
+            out_subdir=out_subdir,
         )
         print(f"checkpoint at: {out}")

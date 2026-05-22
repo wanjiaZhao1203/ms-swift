@@ -44,18 +44,19 @@ def train(
     seed: int = 42,
     alpha: float = 0.1,
     lr: float = 1e-5,
-    # CoT text + hazard activations push the per-sample memory; per-device 2
-    # OOMs at micro-batch 4. Drop to 1 (same as Stage 1) for safety.
     per_device_train_batch_size: int = 1,
     gradient_accumulation_steps: int = 16,
-    num_train_epochs: float = 1.0,
+    num_train_epochs: float = 10.0,
     lora_rank: int = 8,
     smoke_only: bool = False,
+    strict_spec: bool = True,
+    out_subdir: str = "",
 ) -> str:
     import os
     os.environ.update(common_env())
 
-    out_dir = f"/vol/runs/sft_hazard_cot/seed{seed}_a{alpha}"
+    sub = out_subdir or f"seed{seed}_a{alpha}"
+    out_dir = f"/vol/runs/sft_hazard_cot/{sub}"
     os.makedirs(out_dir, exist_ok=True)
 
     cmd = [
@@ -70,6 +71,7 @@ def train(
         "--gradient_accumulation_steps", str(gradient_accumulation_steps),
         "--num_train_epochs", str(num_train_epochs),
         "--lora_rank",   str(lora_rank),
+        "--strict_spec" if strict_spec else "--no_strict_spec",
     ]
     if smoke_only:
         cmd.append("--smoke_only")
@@ -87,20 +89,27 @@ def main(
     lr: float = 1e-5,
     per_device_train_batch_size: int = 1,
     gradient_accumulation_steps: int = 16,
-    num_train_epochs: float = 1.0,
+    num_train_epochs: float = 10.0,
     lora_rank: int = 8,
     smoke_only: bool = False,
+    strict_spec: bool = True,
+    out_subdir: str = "",
     all_seeds: bool = False,
 ):
     if all_seeds:
         for s in [42, 43, 44]:
-            print(f"===== SFT-Hazard+CoT seed={s} alpha={alpha} =====")
+            sub = (out_subdir.replace("{seed}", str(s)) if "{seed}" in out_subdir
+                   else (out_subdir or f"seed{s}_a{alpha}"))
+            print(f"===== SFT-Hazard+CoT seed={s} alpha={alpha} "
+                  f"strict_spec={strict_spec} sub={sub} =====")
             train.remote(
                 seed=s, alpha=alpha, lr=lr,
                 per_device_train_batch_size=per_device_train_batch_size,
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 num_train_epochs=num_train_epochs,
                 lora_rank=lora_rank, smoke_only=smoke_only,
+                strict_spec=strict_spec,
+                out_subdir=sub,
             )
     else:
         out = train.remote(
@@ -109,5 +118,6 @@ def main(
             gradient_accumulation_steps=gradient_accumulation_steps,
             num_train_epochs=num_train_epochs,
             lora_rank=lora_rank, smoke_only=smoke_only,
+            strict_spec=strict_spec, out_subdir=out_subdir,
         )
         print(f"checkpoint at: {out}")

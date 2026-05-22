@@ -93,11 +93,10 @@ class TTCCCollatorCoT:
         user = {
             "role": "user",
             "content": [
-                # Cap per-element so MM expansion stays small on a 80GB H100.
-                # max_pixels must be >= VIDEO_FRAME_MIN_PIXELS=100352 in
-                # qwen_omni_utils 0.0.9; nframes does the rest.
+                # Hyperparams aligned to Liangyu's full-SFT config
+                # (sft_v2cot_full.sh): MAX_PIXELS=200704, FPS_MAX_FRAMES=32.
                 {"type": "video", "video": video_path,
-                 "max_pixels": 100352, "nframes": 8},
+                 "max_pixels": 200704, "nframes": 32},
                 {"type": "audio", "audio": audio_path},
                 {"type": "text",  "text":  USER_PROMPT},
             ],
@@ -184,9 +183,11 @@ class TTCCCollatorCoT:
 
 
 class SFTHazardCoTTrainer(Trainer):
-    def __init__(self, *args, alpha: float = 0.1, **kwargs):
+    def __init__(self, *args, alpha: float = 0.1, strict_spec: bool = True,
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self.alpha = alpha
+        self.strict_spec = strict_spec
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mm = inputs["mm_inputs"]
@@ -211,7 +212,10 @@ class SFTHazardCoTTrainer(Trainer):
         # Hazard MSE in log space.
         T_i = inputs["durations"].to(lam_hat.device)
         lam_true = inputs["lam_true"].to(lam_hat.device).to(lam_hat.dtype)
-        L_hazard = masked_hazard_log_mse(lam_hat.float(), lam_true.float(), T_i)
+        L_hazard = masked_hazard_log_mse(
+            lam_hat.float(), lam_true.float(), T_i,
+            strict_spec=self.strict_spec,
+        )
 
         loss = L_hazard + self.alpha * L_cot
         self.log({"L_hazard": float(L_hazard.detach()),
@@ -227,6 +231,12 @@ def main():
     ap.add_argument("--output_dir", required=True)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--alpha", type=float, default=0.1)
+    ap.add_argument("--strict_spec", action="store_true", default=True,
+                    help="Use spec §3 hazard mask (duration-only, no "
+                         "informative-segment filter). Default True for "
+                         "spec compliance; --no_strict_spec to disable.")
+    ap.add_argument("--no_strict_spec", dest="strict_spec",
+                    action="store_false")
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--per_device_train_batch_size", type=int, default=2)
     ap.add_argument("--gradient_accumulation_steps", type=int, default=8)
@@ -253,11 +263,6 @@ def main():
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
 
-    # Freeze vision + audio encoders.
-    for n, p in model.trunk.named_parameters():
-        if "visual" in n or "audio_tower" in n or "vision" in n:
-            p.requires_grad_(False)
-
     lora_cfg = LoraConfig(
         r=args.lora_rank,
         lora_alpha=args.lora_rank * 4,
@@ -268,6 +273,19 @@ def main():
     )
     # Wrap the thinker, not the outer wrapper (see sft_mse.py comment).
     model.trunk.thinker = get_peft_model(model.trunk.thinker, lora_cfg)
+
+    # Freeze vision + audio encoders AFTER LoRA wrap (§6 = §5: same flags).
+    # PEFT injects adapters on all linears; we zero requires_grad on the
+    # vision/audio adapters.
+    n_frozen = 0
+    for n, p in model.named_parameters():
+        if p.requires_grad and (
+            "visual" in n or "audio_tower" in n or "vision" in n
+            or ".merger." in n
+        ):
+            p.requires_grad_(False)
+            n_frozen += p.numel()
+    print(f"post-LoRA freeze: zero'd {n_frozen:,} params in vision/audio")
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     print(f"trainable params: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
@@ -305,6 +323,7 @@ def main():
         eval_dataset=val_ds if len(val_ds) > 0 else None,
         data_collator=collator,
         alpha=args.alpha,
+        strict_spec=args.strict_spec,
     )
 
     # §4 smoke verification.
