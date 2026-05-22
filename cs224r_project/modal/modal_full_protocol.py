@@ -41,12 +41,13 @@ SUBMISSIONS = [
     ("B1", "/vol/runs/B1_mean_train_curve/submission.parquet"),
     ("B0", "/vol/runs/B0_constant_05/submission.parquet"),
     ("B2", "/vol/runs/B2_uniform_decay/submission.parquet"),
-    ("SFT-MSE-42",  "/vol/runs/sft_mse/seed42_strict/submission.parquet"),
-    ("SFT-MSE-43",  "/vol/runs/sft_mse/seed43_strict/submission.parquet"),
-    ("SFT-MSE-44",  "/vol/runs/sft_mse/seed44_strict/submission.parquet"),
-    ("SFT-CoT-42",  "/vol/runs/sft_hazard_cot/seed42_a0.1_strict/submission.parquet"),
-    ("SFT-CoT-43",  "/vol/runs/sft_hazard_cot/seed43_a0.1_strict/submission.parquet"),
-    ("SFT-CoT-44",  "/vol/runs/sft_hazard_cot/seed44_a0.1_strict/submission.parquet"),
+    # v2 = Liangyu-aligned hparams: 32 frames, 200k px, 10 epochs.
+    ("SFT-MSE-v2-42",  "/vol/runs/sft_mse/seed42_v2/submission.parquet"),
+    ("SFT-MSE-v2-43",  "/vol/runs/sft_mse/seed43_v2/submission.parquet"),
+    ("SFT-MSE-v2-44",  "/vol/runs/sft_mse/seed44_v2/submission.parquet"),
+    ("SFT-CoT-v2-42",  "/vol/runs/sft_hazard_cot/seed42_a0.1_v2/submission.parquet"),
+    ("SFT-CoT-v2-43",  "/vol/runs/sft_hazard_cot/seed43_a0.1_v2/submission.parquet"),
+    ("SFT-CoT-v2-44",  "/vol/runs/sft_hazard_cot/seed44_a0.1_v2/submission.parquet"),
 ]
 
 
@@ -66,7 +67,7 @@ def run_protocol() -> dict:
     os.environ.update(common_env())
     volume.reload()
 
-    proto_dir = Path("/vol/reports/protocol")
+    proto_dir = Path("/vol/reports/protocol_v2")
     proto_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- 0) build train + test GTs in minimal_eval format ----
