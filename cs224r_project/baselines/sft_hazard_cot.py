@@ -306,7 +306,10 @@ def main():
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         eval_steps=args.eval_steps,
-        eval_strategy="steps" if len(val_ds) > 0 else "no",
+        # Disable eval: HF Trainer's eval loop calls model(**inputs) with
+        # collator keys our forward doesn't accept. Final eval is via
+        # make_test_preds_hazard.py + ttcc-eval.
+        eval_strategy="no",
         save_strategy="steps",
         save_total_limit=2,
         dataloader_num_workers=2,

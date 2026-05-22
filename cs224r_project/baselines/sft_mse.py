@@ -253,7 +253,10 @@ def main():
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         eval_steps=args.eval_steps,
-        eval_strategy="steps" if len(val_ds) > 0 else "no",
+        # Disable eval: HF Trainer calls model(**inputs) with `r_true` etc
+        # that our custom forward doesn't accept. We don't track val loss
+        # during training; final eval happens via make_test_preds.py.
+        eval_strategy="no",
         save_strategy="steps",
         save_total_limit=2,
         dataloader_num_workers=2,
