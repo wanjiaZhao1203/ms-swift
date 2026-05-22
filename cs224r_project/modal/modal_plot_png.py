@@ -23,7 +23,8 @@ image = attach_code(make_cpu_image().pip_install("matplotlib>=3.7"))
     cpu=2.0,
     memory=4 * 1024,
 )
-def plot(seed: int = 0, n: int = 8) -> str:
+def plot(seed: int = 0, n: int = 8, strategy: str = "by_T",
+         sft_cot_seed: int = 43, out_subdir: str = "diagnostics_v2") -> str:
     import os
     os.environ.update(common_env())
     volume.reload()
@@ -31,20 +32,27 @@ def plot(seed: int = 0, n: int = 8) -> str:
         "python", "/root/cs224r_project/eval/plot_curves_png.py",
         "--gt", "/vol/data/splits/test.jsonl",
         "--b1", "/vol/runs/B1_mean_train_curve/submission.parquet",
-        "--sft_cot", "/vol/runs/sft_hazard_cot/seed42_a0.1_strict/submission.parquet",
-        "--sft_mse", "/vol/runs/sft_mse/seed42_strict/submission.parquet",
-        "--out_dir", "/vol/runs/diagnostics",
+        "--sft_cot", f"/vol/runs/sft_hazard_cot/seed{sft_cot_seed}_a0.1_v2/submission.parquet",
+        "--sft_mse", f"/vol/runs/sft_mse/seed{sft_cot_seed}_v2/submission.parquet",
+        "--out_dir", f"/vol/runs/{out_subdir}",
         "--n", str(n),
         "--seed", str(seed),
-        "--strategy", "by_T",
+        "--strategy", strategy.replace("-", "_"),
     ]
     print(f"$ {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
     volume.commit()
-    return "/vol/runs/diagnostics/sample_curves_grid.png"
+    return f"/vol/runs/{out_subdir}/sample_curves_grid.png"
 
 
 @app.local_entrypoint()
-def main(seed: int = 0, n: int = 8):
-    p = plot.remote(seed=seed, n=n)
+def main(
+    seed: int = 0,
+    n: int = 8,
+    strategy: str = "by_T",
+    sft_cot_seed: int = 43,
+    out_subdir: str = "diagnostics_v2",
+):
+    p = plot.remote(seed=seed, n=n, strategy=strategy,
+                    sft_cot_seed=sft_cot_seed, out_subdir=out_subdir)
     print(f"grid at {p}")

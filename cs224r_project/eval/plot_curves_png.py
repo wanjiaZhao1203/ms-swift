@@ -84,8 +84,14 @@ def main():
     ap.add_argument("--out_dir", required=True)
     ap.add_argument("--n", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--strategy", choices=["random", "by_T"], default="by_T",
-                    help="random: i.i.d. sample; by_T: spread across T_i values")
+    ap.add_argument("--strategy",
+                    choices=["random", "by_T", "all", "hardest_for_cot",
+                             "easiest_for_cot", "biggest_cot_vs_b1_win",
+                             "biggest_cot_vs_b1_loss"],
+                    default="by_T",
+                    help="random | by_T | all | hardest_for_cot (highest SFT-CoT IBS) "
+                         "| easiest_for_cot | biggest_cot_vs_b1_win (most negative ΔIBS) "
+                         "| biggest_cot_vs_b1_loss")
     args = ap.parse_args()
 
     gt = load_gt(args.gt)
@@ -95,6 +101,11 @@ def main():
 
     common = sorted(set(gt) & set(b1) & set(sft_cot) & set(sft_mse))
     print(f"common ads: {len(common)}")
+
+    def per_ad_ibs(preds_dict, ad):
+        T_i, true = gt[ad]
+        a = np.asarray(preds_dict[ad][: T_i + 1]); b = np.asarray(true[: T_i + 1])
+        return float(np.mean((a - b) ** 2))
 
     if args.strategy == "by_T":
         # Bucket ads by T_i, pick roughly equal counts across buckets.
@@ -109,15 +120,28 @@ def main():
             ads = buckets[bucket]
             rng.shuffle(ads)
             sample.append(ads[0])
-        # Trim/pad to n.
         if len(sample) > args.n:
             sample = sample[: args.n]
         elif len(sample) < args.n:
             extras = rng.choice([a for a in common if a not in sample],
                                 size=args.n - len(sample), replace=False)
             sample += extras.tolist()
-        # Sort by T_i for cleaner output.
         sample.sort(key=lambda a: gt[a][0])
+    elif args.strategy == "all":
+        sample = sorted(common, key=lambda a: gt[a][0])
+        args.n = len(sample)
+    elif args.strategy == "hardest_for_cot":
+        sample = sorted(common, key=lambda a: per_ad_ibs(sft_cot, a), reverse=True)
+        sample = sample[: args.n]
+    elif args.strategy == "easiest_for_cot":
+        sample = sorted(common, key=lambda a: per_ad_ibs(sft_cot, a))
+        sample = sample[: args.n]
+    elif args.strategy == "biggest_cot_vs_b1_win":
+        sample = sorted(common, key=lambda a: per_ad_ibs(sft_cot, a) - per_ad_ibs(b1, a))
+        sample = sample[: args.n]
+    elif args.strategy == "biggest_cot_vs_b1_loss":
+        sample = sorted(common, key=lambda a: per_ad_ibs(sft_cot, a) - per_ad_ibs(b1, a), reverse=True)
+        sample = sample[: args.n]
     else:
         rng = np.random.default_rng(args.seed)
         sample = sorted(
