@@ -48,6 +48,8 @@ def train(
     gradient_accumulation_steps: int = 16,
     num_train_epochs: float = 10.0,
     lora_rank: int = 8,
+    nframes: int = 32,
+    max_pixels: int = 200704,
     smoke_only: bool = False,
     strict_spec: bool = True,
     out_subdir: str = "",
@@ -71,6 +73,8 @@ def train(
         "--gradient_accumulation_steps", str(gradient_accumulation_steps),
         "--num_train_epochs", str(num_train_epochs),
         "--lora_rank",   str(lora_rank),
+        "--nframes",     str(nframes),
+        "--max_pixels",  str(max_pixels),
         "--strict_spec" if strict_spec else "--no_strict_spec",
     ]
     if smoke_only:
@@ -91,6 +95,8 @@ def main(
     gradient_accumulation_steps: int = 16,
     num_train_epochs: float = 10.0,
     lora_rank: int = 8,
+    nframes: int = 32,
+    max_pixels: int = 200704,
     smoke_only: bool = False,
     strict_spec: bool = True,
     out_subdir: str = "",
@@ -107,7 +113,9 @@ def main(
                 per_device_train_batch_size=per_device_train_batch_size,
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 num_train_epochs=num_train_epochs,
-                lora_rank=lora_rank, smoke_only=smoke_only,
+                lora_rank=lora_rank,
+                nframes=nframes, max_pixels=max_pixels,
+                smoke_only=smoke_only,
                 strict_spec=strict_spec,
                 out_subdir=sub,
             )
@@ -117,7 +125,9 @@ def main(
             per_device_train_batch_size=per_device_train_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
             num_train_epochs=num_train_epochs,
-            lora_rank=lora_rank, smoke_only=smoke_only,
+            lora_rank=lora_rank,
+            nframes=nframes, max_pixels=max_pixels,
+            smoke_only=smoke_only,
             strict_spec=strict_spec, out_subdir=out_subdir,
         )
         print(f"checkpoint at: {out}")

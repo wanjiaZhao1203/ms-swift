@@ -57,6 +57,8 @@ def train(
     gradient_accumulation_steps: int = 16,
     num_train_epochs: float = 10.0,
     lora_rank: int = 8,
+    nframes: int = 32,
+    max_pixels: int = 200704,
     smoke_only: bool = False,
     out_subdir: str = "",
 ) -> str:
@@ -78,6 +80,8 @@ def train(
         "--gradient_accumulation_steps", str(gradient_accumulation_steps),
         "--num_train_epochs", str(num_train_epochs),
         "--lora_rank",   str(lora_rank),
+        "--nframes",     str(nframes),
+        "--max_pixels",  str(max_pixels),
     ]
     if smoke_only:
         cmd.append("--smoke_only")
@@ -96,6 +100,8 @@ def main(
     gradient_accumulation_steps: int = 16,
     num_train_epochs: float = 10.0,
     lora_rank: int = 8,
+    nframes: int = 32,
+    max_pixels: int = 200704,
     smoke_only: bool = False,
     out_subdir: str = "",
     all_seeds: bool = False,
@@ -112,6 +118,8 @@ def main(
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 num_train_epochs=num_train_epochs,
                 lora_rank=lora_rank,
+                nframes=nframes,
+                max_pixels=max_pixels,
                 smoke_only=smoke_only,
                 out_subdir=sub,
             )
@@ -123,6 +131,8 @@ def main(
             gradient_accumulation_steps=gradient_accumulation_steps,
             num_train_epochs=num_train_epochs,
             lora_rank=lora_rank,
+            nframes=nframes,
+            max_pixels=max_pixels,
             smoke_only=smoke_only,
             out_subdir=out_subdir,
         )

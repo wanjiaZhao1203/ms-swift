@@ -98,6 +98,8 @@ class TTCCDataset(Dataset):
 @dataclass
 class TTCCCollator:
     processor: Any
+    nframes: int = 32
+    max_pixels: int = 200704
 
     def __call__(self, batch: list[dict]) -> dict:
         from qwen_omni_utils import process_mm_info
@@ -110,11 +112,8 @@ class TTCCCollator:
             conv = [{
                 "role": "user",
                 "content": [
-                    # Hyperparams aligned to Liangyu's full-SFT config
-                    # (sft_v2cot_full.sh): MAX_PIXELS=200704, FPS_MAX_FRAMES=32.
-                    # qwen_omni_utils reads these per-element rather than env.
                     {"type": "video", "video": video_path,
-                     "max_pixels": 200704, "nframes": 32},
+                     "max_pixels": self.max_pixels, "nframes": self.nframes},
                     {"type": "audio", "audio": audio_path},
                     {"type": "text",  "text":  USER_PROMPT},
                 ],
@@ -186,6 +185,10 @@ def main():
     ap.add_argument("--gradient_accumulation_steps", type=int, default=4)
     ap.add_argument("--num_train_epochs", type=float, default=1.0)
     ap.add_argument("--lora_rank", type=int, default=8)
+    ap.add_argument("--nframes", type=int, default=32,
+                    help="frames per video (v2=32, v3=60)")
+    ap.add_argument("--max_pixels", type=int, default=200704,
+                    help="max pixels per frame")
     ap.add_argument("--logging_steps", type=int, default=5)
     ap.add_argument("--save_steps", type=int, default=200)
     ap.add_argument("--eval_steps", type=int, default=200)
@@ -239,7 +242,8 @@ def main():
 
     train_ds = TTCCDataset(args.train_jsonl)
     val_ds = TTCCDataset(args.val_jsonl)
-    collator = TTCCCollator(processor=processor)
+    collator = TTCCCollator(processor=processor, nframes=args.nframes,
+                            max_pixels=args.max_pixels)
 
     targs = TrainingArguments(
         output_dir=args.output_dir,
