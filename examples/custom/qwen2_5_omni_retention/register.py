@@ -114,6 +114,8 @@ try:
                     self.custom_metrics[mode]['loss_cot'].update(holder.loss_cot)
                 if holder.cot_alpha is not None:
                     self.custom_metrics[mode]['cot_alpha'].update(holder.cot_alpha)
+                if holder.cot_token_acc is not None:
+                    self.custom_metrics[mode]['cot_token_acc'].update(holder.cot_token_acc)
         except (AttributeError, KeyError):
             # Holder/model structure changed; metrics won't log but training continues.
             pass
@@ -245,7 +247,7 @@ class _HiddenStateHolder:
       so PyTorch fires it first and we get the pre-conversion value.
     """
     __slots__ = ('last', 'input_ids', 'r_true', 'r_mask', 'r_pred',
-                 'loss_curve', 'loss_cot', 'cot_alpha')
+                 'loss_curve', 'loss_cot', 'cot_alpha', 'cot_token_acc')
 
     def __init__(self):
         self.last = None
@@ -256,6 +258,7 @@ class _HiddenStateHolder:
         self.loss_curve = None
         self.loss_cot = None
         self.cot_alpha = None
+        self.cot_token_acc = None
 
 
 def _make_lm_head_capture_hook(holder: '_HiddenStateHolder'):
@@ -717,6 +720,7 @@ class RetentionLoss(BaseLoss):
 
         alpha = float(get_env_args('RETENTION_COT_ALPHA', str, '0.0'))
         loss_cot = None
+        cot_token_acc = None
         if alpha > 0 and labels is not None and getattr(outputs, 'logits', None) is not None:
             logits = outputs.logits
             loss_cot = F.cross_entropy(
@@ -724,6 +728,15 @@ class RetentionLoss(BaseLoss):
                 labels.view(-1),
                 ignore_index=-100,
             )
+            # Teacher-forced next-token argmax accuracy on supervised positions
+            # (labels != -100, which under the with-CoT template covers <cot>...</cot>).
+            # Free signal: logits/labels already in hand for CE above.
+            with torch.no_grad():
+                preds = logits.argmax(dim=-1)
+                mask = labels.ne(-100)
+                denom = mask.sum()
+                if denom.item() > 0:
+                    cot_token_acc = (preds.eq(labels) & mask).sum().float() / denom.float()
             total = loss_curve + alpha * loss_cot
         else:
             total = loss_curve
@@ -734,6 +747,8 @@ class RetentionLoss(BaseLoss):
             if loss_cot is not None:
                 object.__setattr__(outputs, 'loss_cot', loss_cot.detach())
                 object.__setattr__(outputs, 'cot_alpha', alpha)
+            if cot_token_acc is not None:
+                object.__setattr__(outputs, 'cot_token_acc', cot_token_acc.detach())
         except (AttributeError, TypeError):
             # Some output container types reject attribute setting; skip silently.
             pass
@@ -749,6 +764,8 @@ class RetentionLoss(BaseLoss):
                 if loss_cot is not None:
                     holder.loss_cot = float(loss_cot.detach().item())
                     holder.cot_alpha = float(alpha)
+                if cot_token_acc is not None:
+                    holder.cot_token_acc = float(cot_token_acc.detach().item())
         return total
 
 
